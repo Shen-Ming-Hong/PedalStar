@@ -1,427 +1,207 @@
-# Copilot Instructions for PedalStar 光光星# Copilot Instructions for PedalStar 光光星# Copilot Instructions for PedalStar 光光星
+# Copilot Instructions for PedalStar 光光星
 
 ## 專案概述
 
-這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統，使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉，並根據旋轉圈數控制 RGB LED 燈的能量顯示效果。## 專案概述## 專案概述
+這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統,使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉,並根據旋轉圈數控制 5 顆雙色 LED (RG) 燈的能量顯示效果,模擬星星從紅色到綠色的發光變化。
 
 ## 架構與設計原則
 
-### 硬體架構這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統，使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉，並根據旋轉圈數控制 RGB LED 燈的能量顯示效果。這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統，使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉，並根據旋轉圈數控制 RGB LED 燈的能量顯示效果。
+### 系統架構
 
 -   **主控制器**: Arduino Uno (ATmega328P)
+-   **感測輸入**: 霍爾感測器模組 A3144 (D2) + 磁鐵
+-   **輸出裝置**: 5 顆雙色 LED (紅、綠,共陰極)
+-   **資料流**: 霍爾中斷 → 計數累積 → 能量計算 → 燈光顏色漸變 (紅 → 橙 → 黃 → 黃綠 → 綠)
 
--   **感測輸入**: 霍爾感測器 + 磁鐵（每轉一圈觸發一次）
+### 關鍵設計模式
 
--   **輸出裝置**: RGB LED 燈（使用 PWM 控制）
+**1. 完整波形偵測 (防止誤計數)**
 
--   **工作流程**: 感測 → 計數 → 能量累積 → 燈光回饋## 架構與設計原則## 架構與設計原則
+```cpp
+// 使用 CHANGE 模式中斷 + 狀態追蹤
+// LOW (磁鐵靠近) → HIGH (磁鐵遠離) = 完成一圈
+volatile bool magnetDetected = false;
+attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), hallSensorISR, CHANGE);
+```
+
+**2. 非阻塞計時 (主迴圈設計)**
+
+```cpp
+// 絕對禁止使用 delay(),改用 millis() 實現多任務
+unsigned long currentMillis = millis();
+if (currentMillis - previousMillis >= TIME_WINDOW) {
+    // 處理能量計算與 LED 更新
+}
+```
+
+**3. 能量衰減機制**
+
+-   閒置 3 秒後開始衰減 (`IDLE_TIMEOUT`)
+-   每秒降低 8% 能量 (`DECAY_RATE`)
+-   透過 `lastRotationTime` 追蹤最後活動時間
+
+### 腳位配置 (相鄰腳位優化)
+
+```
+霍爾感測器: D2 (INT0 中斷腳位)
+LED 配置 (G-R 盡量相鄰以簡化接線):
+  LED1: G=D3(PWM), R=D4 ★相鄰
+  LED2: G=D5(PWM), R=D7
+  LED3: G=D6(PWM), R=D8
+  LED4: G=D9(PWM), R=D12
+  LED5: G=D10(PWM), R=D11 ★相鄰
+```
+
+**設計理由**:
+
+-   綠色通道全部使用 PWM 腳位 → 支援平滑漸變
+-   紅色通道使用數位腳位 → 僅需開/關控制
+-   避免 D13 (板載 LED 干擾除錯)
+
+## 開發工作流程
+
+### ⚠️ AI Agent 限制
+
+**禁止直接執行 PlatformIO 指令** - 只能生成/修改程式碼,不能執行:
+
+-   `pio run` (編譯)
+-   `pio run --target upload` (上傳)
+-   `pio device monitor` (監控)
+
+使用者需手動執行上述指令。
+
+### Windows PowerShell 工作流程
+
+在 Windows 環境下,推薦使用 PowerShell 執行 PlatformIO 指令:
+
+```powershell
+# 編譯專案
+pio run
+
+# 上傳到 Arduino (自動偵測 COM port)
+pio run --target upload
+
+# 監控序列埠輸出 (鮑率 9600)
+pio device monitor
+
+# 一鍵編譯並上傳
+pio run --target upload && pio device monitor
+```
+
+**注意**: `update-instructions.ps1` 目前為空檔案,未來可用於自動化工作流程。
 
 ### 程式碼組織
 
--   `src/main.cpp`: 主程式邏輯（目前為範本，需實作霍爾感測器與 LED 控制）
+-   **`src/main.cpp`**: 所有功能實作集中於此 (單一檔案架構)
+-   **`include/`**: 空目錄 (未來可放標頭檔)
+-   **`lib/`**: 空目錄 (未來可模組化為自訂函式庫)
+-   **`platformio.ini`**: 無外部依賴,使用 Arduino 內建功能
 
--   `include/`: 自訂標頭檔（目前為空）### 硬體架構### 硬體架構
+### 除錯流程
 
--   `lib/`: 專案特定函式庫（目前為空）
+1. 程式中已使用 `Serial.begin(9600)` 初始化
+2. 關鍵資訊輸出 (旋轉偵測、能量計算、LED 狀態) 已實作
+3. 提醒使用者執行 `pio device monitor` 查看即時輸出
+4. 啟動時會執行 `ledStartupTest()` 測試硬體連線
 
--   `platformio.ini`: 板子配置（`board = uno`, `framework = arduino`）- **主控制器**: Arduino Uno (ATmega328P)
+## 專案特定慣例
 
-## 開發工作流程- **感測輸入**: 霍爾感測器 + 磁鐵（每轉一圈觸發一次）- **主控制器**: Arduino Uno (ATmega328P)
+### 調整遊戲難度
 
-### ⚠️ 重要：AI Agent 限制- **輸出裝置**: RGB LED 燈（使用 PWM 控制）- **感測輸入**: 霍爾感測器 + 磁鐵（每轉一圈觸發一次）
+在 `src/main.cpp` 頂部調整以下參數:
 
--   **禁止直接執行 `pio` 指令**：AI agent 無法使用 PlatformIO CLI 指令
-
--   編譯、上傳、監控等操作需由使用者手動執行- **工作流程**: 感測 → 計數 → 能量累積 → 燈光回饋- **輸出裝置**: RGB LED 燈（使用 PWM 控制）
-
--   Agent 只負責生成或修改程式碼，不執行建置流程
-
--   **工作流程**: 感測 → 計數 → 能量累積 → 燈光回饋
-
-### 編譯與上傳（使用者手動執行）
-
-```bash### 程式碼組織
-
-# 編譯專案
-
-pio run- `src/main.cpp`: 主程式邏輯（目前為範本，需實作霍爾感測器與 LED 控制）### 程式碼組織
-
-
-
-# 編譯並上傳到 Arduino Uno- `include/`: 自訂標頭檔（目前為空）
-
-pio run --target upload
-
-- `lib/`: 專案特定函式庫（目前為空）-   `src/main.cpp`: 主程式邏輯（目前為範本，需實作霍爾感測器與 LED 控制）
-
-# 清除編譯產物
-
-pio run --target clean- `platformio.ini`: 板子配置（`board = uno`, `framework = arduino`）-   `include/`: 自訂標頭檔（目前為空）
-
+```cpp
+#define MAX_ROTATIONS 20    // ⚙️ 達到 100% 能量所需每秒圈數 (增加=更難)
+#define DECAY_RATE 8        // ⚙️ 能量衰減速度 %/秒 (增加=能量消失更快)
+#define IDLE_TIMEOUT 3000   // 開始衰減前的等待時間 (毫秒)
 ```
 
--   `lib/`: 專案特定函式庫（目前為空）
+**難度建議**:
 
-### 除錯與監控（使用者手動執行）
+-   簡單 (4-6 歲): `MAX_ROTATIONS=15`, `DECAY_RATE=5`
+-   適中 (7-9 歲): `MAX_ROTATIONS=20-25`, `DECAY_RATE=6-8`
+-   困難 (10 歲+): `MAX_ROTATIONS=35-50`, `DECAY_RATE=10-12`
 
-```bash## 開發工作流程-   `platformio.ini`: 板子配置（`board = uno`, `framework = arduino`）
+### 能量與燈光映射
 
-# 開啟序列埠監控（用於 Serial.print 除錯）
+能量百分比決定點亮 LED 數量與顏色:
 
-pio device monitor
+| 能量範圍 | LED 數量 | 顏色 (R,G) | 視覺效果         |
+| -------- | -------- | ---------- | ---------------- |
+| 0-20%    | 1 顆     | (255,0)    | 🔴 紅色 (冷星)   |
+| 20-40%   | 2 顆     | (255,85)   | 🟠 橙色          |
+| 40-60%   | 3 顆     | (255,170)  | 🟡 黃色 (太陽色) |
+| 60-80%   | 4 顆     | (127,255)  | 🟢 黃綠色        |
+| 80-100%  | 5 顆     | (0,255)    | 💚 綠色 (熱星)   |
 
-# 或使用 PlatformIO 整合的監控功能### ⚠️ 重要：AI Agent 限制## 開發工作流程
+實作於 `updateLEDsByEnergy(int energyLevel)` 函式。
 
-pio run --target upload --target monitor
+### 除錯參數
 
-```- **禁止直接執行 `pio` 指令\*\*：AI agent 無法使用 PlatformIO CLI 指令
+在 `src/main.cpp` 中可切換除錯輸出:
 
-## 專案特定慣例- 編譯、上傳、監控等操作需由使用者手動執行### 編譯與上傳
+```cpp
+#define PRINT_ROTATION true  // 即時輸出每次旋轉偵測 (除錯用)
+```
 
-### ⚠️ 硬體實作前置作業- Agent 只負責生成或修改程式碼，不執行建置流程
+設為 `false` 可減少序列埠輸出,提升效能。
 
-**在實作任何硬體控制程式碼之前，必須先查證：**
+### 中斷服務函式 (ISR) 規則
 
-````bash
-
-1. **使用網路搜尋工具**查詢模組規格與接線方式
-
-2. 確認 Arduino Uno 腳位功能（數位/類比/PWM/中斷）### 編譯與上傳（使用者手動執行）# 編譯專案
-
-3. 驗證感測器工作電壓與邏輯電平（3.3V 或 5V）
-
-4. 查詢相關函式庫或範例程式碼```bashpio run
-
-5. 確認腳位衝突（例如 PWM 與中斷共用腳位）
-
-# 編譯專案
-
-**範例查證流程：**
-
-- 搜尋「Arduino Uno 霍爾感測器接線」pio run# 編譯並上傳到 Arduino Uno
-
-- 搜尋「Arduino Uno PWM 腳位」
-
-- 搜尋「Arduino attachInterrupt 可用腳位」pio run --target upload
-
-- 搜尋「RGB LED 共陰極 共陽極 接線」
-
-# 編譯並上傳到 Arduino Uno
-
-**查證後必須在程式碼註解中說明：**
-
-```cpppio run --target upload# 清除編譯產物
-
-// 霍爾感測器型號：A3144（查證：工作電壓 5V，輸出為數位訊號）
-
-// 接線：VCC -> 5V, GND -> GND, OUT -> D2（支援外部中斷 INT0）pio run --target clean
-
-#define HALL_SENSOR_PIN 2
-
-# 清除編譯產物```
-
-// RGB LED：共陰極（查證：需要高電位點亮）
-
-// R -> D9 (PWM), G -> D10 (PWM), B -> D11 (PWM)pio run --target clean
-
-#define LED_RED_PIN 9
-
-#define LED_GREEN_PIN 10```### 除錯與監控
-
-#define LED_BLUE_PIN 11
-
-````
-
-### 腳位配置慣例### 除錯與監控（使用者手動執行）```bash
-
-當實作硬體控制時，建議遵循以下慣例：
-
--   **霍爾感測器**: 使用數位腳位（建議 D2 或 D3，支援中斷）```bash# 開啟序列埠監控（用於 Serial.print 除錯）
-
--   **RGB LED**: 使用 PWM 腳位（D3, D5, D6, D9, D10, D11）
-
--   在 `main.cpp` 開頭使用 `#define` 定義腳位# 開啟序列埠監控（用於 Serial.print 除錯）pio device monitor
-
--   腳位定義必須包含查證來源的註解
-
-pio device monitor
-
-### 中斷處理模式
-
-霍爾感測器應使用中斷模式偵測轉速，避免 polling 造成延遲：# 或使用 PlatformIO 整合的監控功能
-
-````cpp
-
-volatile unsigned int rotationCount = 0;# 或使用 PlatformIO 整合的監控功能pio run --target upload --target monitor
-
-
-
-void hallSensorISR() {pio run --target upload --target monitor```
-
-    rotationCount++;
-
-}```
-
-
-
-void setup() {## 專案特定慣例
-
-    pinMode(HALL_SENSOR_PIN, INPUT_PULLUP);
-
-    attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), hallSensorISR, FALLING);## 專案特定慣例
-
-}
-
-```### 腳位配置慣例
-
-
-
-### 能量計算邏輯### ⚠️ 硬體實作前置作業
-
-- 使用**時間窗口**（例如每 5 秒）計算旋轉圈數
-
-- 能量值 = 圈數累積，並映射到 LED 燈數或亮度級別**在實作任何硬體控制程式碼之前，必須先查證：**當實作硬體控制時，建議遵循以下慣例：
-
-- 使用 `map()` 函數將圈數對應到 LED 亮度（0-255）
-
-
-
-### LED 控制模式
-
-- 使用 `analogWrite()` 控制 PWM 輸出實現燈光效果1. **使用網路搜尋工具**查詢模組規格與接線方式-   **霍爾感測器**: 使用數位腳位（建議 D2 或 D3，支援中斷）
-
-- 建議實作漸變效果而非突變，提升視覺體驗
-
-- 考慮使用狀態機管理不同能量等級的燈光模式2. 確認 Arduino Uno 腳位功能（數位/類比/PWM/中斷）-   **RGB LED**: 使用 PWM 腳位（D3, D5, D6, D9, D10, D11）
-
-
-
-## 常見開發情境3. 驗證感測器工作電壓與邏輯電平（3.3V 或 5V）-   在 `main.cpp` 開頭使用 `#define` 定義腳位，例如：
-
-
-
-### 新增功能時4. 查詢相關函式庫或範例程式碼    ```cpp
-
-1. **先使用網路搜尋工具查證硬體規格與接線方式**
-
-2. 所有硬體相關程式碼寫在 `src/main.cpp`5. 確認腳位衝突（例如 PWM 與中斷共用腳位）    #define HALL_SENSOR_PIN 2
-
-3. 若需模組化，可在 `lib/` 建立自訂函式庫
-
-4. 標頭檔放在 `include/` 或函式庫的對應目錄    #define LED_RED_PIN 9
-
-
-
-### 測試硬體時**範例查證流程：**    #define LED_GREEN_PIN 10
-
-1. 使用 `Serial.begin(9600)` 初始化序列埠
-
-2. 用 `Serial.print()` 輸出除錯資訊（旋轉次數、能量值等）- 搜尋「Arduino Uno 霍爾感測器接線」    #define LED_BLUE_PIN 11
-
-3. 提醒使用者執行 `pio device monitor` 查看即時輸出（Agent 無法執行）
-
-- 搜尋「Arduino Uno PWM 腳位」    ```
-
-### 調整硬體設定
-
-- 修改 `platformio.ini` 的 `upload_port` 指定 COM port（Windows）或 `/dev/ttyUSB0`（Linux）- 搜尋「Arduino attachInterrupt 可用腳位」
-
-- 調整 `monitor_speed` 設定序列埠鮑率（預設通常是 9600）
-
-- 搜尋「RGB LED 共陰極 共陽極 接線」### 中斷處理模式
-
-### 新增函式庫依賴
-
-在 `platformio.ini` 中新增函式庫時，**優先使用 GitHub URL** 引用最新版本：
-
-
-
-```ini**查證後必須在程式碼註解中說明：**霍爾感測器應使用中斷模式偵測轉速，避免 polling 造成延遲：
-
-[env:uno]
-
-platform = atmelavr```cpp
-
-board = uno
-
-framework = arduino// 霍爾感測器型號：A3144（查證：工作電壓 5V，輸出為數位訊號）```cpp
-
-lib_deps =
-
-    # 使用 GitHub URL 引用最新版本（推薦）// 接線：VCC -> 5V, GND -> GND, OUT -> D2（支援外部中斷 INT0）volatile unsigned int rotationCount = 0;
-
-    https://github.com/FastLED/FastLED.git
-
-    https://github.com/adafruit/Adafruit_NeoPixel.git#define HALL_SENSOR_PIN 2
-
-
-
-    # 或使用 PlatformIO 函式庫管理器 IDvoid hallSensorISR() {
-
-    fastled/FastLED@^3.0.0
-
-```// RGB LED：共陰極（查證：需要高電位點亮）    rotationCount++;
-
-
-
-**函式庫引用原則：**// R -> D9 (PWM), G -> D10 (PWM), B -> D11 (PWM)}
-
-1. **優先使用 GitHub URL**（`https://github.com/owner/repo.git`）以獲取最新版本
-
-2. 使用前先**網路搜尋確認函式庫的官方 GitHub repository**#define LED_RED_PIN 9
-
-3. 確認函式庫與 Arduino Uno 相容性
-
-4. 如需特定版本，可使用標籤語法：`https://github.com/owner/repo.git#v1.2.3`#define LED_GREEN_PIN 10void setup() {
-
-5. 若 GitHub URL 失效，再改用 PlatformIO Library Registry ID
-
-#define LED_BLUE_PIN 11    attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), hallSensorISR, FALLING);
-
-**範例查證流程：**
-
-- 搜尋「FastLED Arduino library GitHub」```}
-
-- 確認 repository 是否為官方維護
-
-- 檢查 README 中的 Arduino Uno 相容性說明```
-
-- 查看最近更新時間與 issues 回應狀況
-
-### 腳位配置慣例
-
-## 重要提醒
-
-當實作硬體控制時，建議遵循以下慣例：### 能量計算邏輯
-
-- **硬體實作前必須先網路查證**：使用搜尋工具確認模組規格、腳位、接線方式
-
-- **函式庫優先使用 GitHub URL**：確保獲取最新版本，需先網路查證官方 repository- **霍爾感測器**: 使用數位腳位（建議 D2 或 D3，支援中斷）
-
-- **不要使用 `delay()` 阻塞主迴圈**：改用 `millis()` 實作非阻塞計時
-
-- **去彈跳處理**：霍爾感測器可能產生雜訊，需實作去彈跳邏輯- **RGB LED**: 使用 PWM 腳位（D3, D5, D6, D9, D10, D11）-   使用**時間窗口**（例如每 5 秒）計算旋轉圈數
-
-- **中斷函數要簡短**：在 ISR 中只做必要操作，避免複雜運算
-
-- **序列埠除錯**：開發階段保留 Serial 輸出，但上線版本可移除以節省記憶體- 在 `main.cpp` 開頭使用 `#define` 定義腳位-   能量值 = 圈數累積，並映射到 LED 燈數或亮度級別
-
-- **Agent 無法執行 PlatformIO 指令**：只能修改程式碼，不能執行編譯上傳
-
-- 腳位定義必須包含查證來源的註解-   使用 `map()` 函數將圈數對應到 LED 亮度（0-255）
-
-## 未來擴充方向
-
-
-
-根據 README.md，規劃的功能包括：
-
-- 音效回饋（需加入蜂鳴器或音效模組）### 中斷處理模式### LED 控制模式
-
-- 最高分數記錄（需 EEPROM 儲存）
-
-- 多人競賽模式（需多組感測器與狀態管理）霍爾感測器應使用中斷模式偵測轉速，避免 polling 造成延遲：
-
-- 更多燈光效果（可使用 NeoPixel 或 WS2812B 燈條）
-
-```cpp-   使用 `analogWrite()` 控制 PWM 輸出實現燈光效果
-
-**擴充功能前的查證範例：**
-
-- 搜尋「Arduino 蜂鳴器接線」volatile unsigned int rotationCount = 0;-   建議實作漸變效果而非突變，提升視覺體驗
-
-- 搜尋「Arduino EEPROM 讀寫範例」
-
-- 搜尋「Arduino WS2812B FastLED 函式庫」-   考慮使用狀態機管理不同能量等級的燈光模式
-
-- 搜尋「FastLED GitHub official repository」
-
+```cpp
 void hallSensorISR() {
-
-    rotationCount++;## 常見開發情境
-
+    // ✓ 只做狀態更新與簡單變數操作
+    // ✗ 禁止 Serial.print (可能導致當機)
+    // ✗ 禁止複雜運算或呼叫其他函式
+    rotationCount++;
+    lastRotationTime = millis();
 }
+```
 
-### 新增功能時
+### 硬體模組查證流程
 
-void setup() {
+**在實作任何硬體相關程式碼前,必須先網路查證:**
 
-    pinMode(HALL_SENSOR_PIN, INPUT_PULLUP);1. 所有硬體相關程式碼寫在 `src/main.cpp`
+1. 搜尋模組規格與接線方式 (例如: "Arduino Uno 霍爾感測器 A3144 接線")
+2. 確認 Arduino Uno 腳位功能 (數位/類比/PWM/中斷)
+3. 驗證工作電壓與邏輯電平 (3.3V 或 5V)
+4. 查詢相關函式庫或範例程式碼
 
-    attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), hallSensorISR, FALLING);2. 若需模組化，可在 `lib/` 建立自訂函式庫
+**查證結果必須註解在程式碼中** (參考 `main.cpp` 第 18-82 行的腳位定義註解)。
 
-}3. 標頭檔放在 `include/` 或函式庫的對應目錄
+## 常見開發情境
 
-````
+### 新增功能
 
-### 測試硬體時
+1. 在 `src/main.cpp` 中實作
+2. 需要模組化時,可在 `lib/` 建立新函式庫
+3. 標頭檔放在 `include/` 或函式庫目錄
 
-### 能量計算邏輯
+### 修改硬體設定
 
--   使用**時間窗口**（例如每 5 秒）計算旋轉圈數 1. 使用 `Serial.begin(9600)` 初始化序列埠
+-   **COM port**: 修改 `platformio.ini` 的 `upload_port` (Windows: `COM3`, Linux: `/dev/ttyUSB0`)
+-   **鮑率**: 修改 `monitor_speed` (預設 9600)
 
--   能量值 = 圈數累積，並映射到 LED 燈數或亮度級別 2. 用 `Serial.print()` 輸出除錯資訊（旋轉次數、能量值等）
+### 新增外部函式庫
 
--   使用 `map()` 函數將圈數對應到 LED 亮度（0-255）3. 執行 `pio device monitor` 查看即時輸出
+目前專案不依賴外部函式庫。若未來需要 (如 FastLED),優先使用 GitHub URL:
 
-### LED 控制模式### 調整硬體設定
-
--   使用 `analogWrite()` 控制 PWM 輸出實現燈光效果
-
--   建議實作漸變效果而非突變，提升視覺體驗- 修改 `platformio.ini` 的 `upload_port` 指定 COM port（Windows）或 `/dev/ttyUSB0`（Linux）
-
--   考慮使用狀態機管理不同能量等級的燈光模式- 調整 `monitor_speed` 設定序列埠鮑率（預設通常是 9600）
-
-## 常見開發情境## 重要提醒
-
-### 新增功能時- **不要使用 `delay()` 阻塞主迴圈**：改用 `millis()` 實作非阻塞計時
-
-1. **先使用網路搜尋工具查證硬體規格與接線方式**- **去彈跳處理**：霍爾感測器可能產生雜訊，需實作去彈跳邏輯
-
-2. 所有硬體相關程式碼寫在 `src/main.cpp`- **中斷函數要簡短**：在 ISR 中只做必要操作，避免複雜運算
-
-3. 若需模組化，可在 `lib/` 建立自訂函式庫- **序列埠除錯**：開發階段保留 Serial 輸出，但上線版本可移除以節省記憶體
-
-4. 標頭檔放在 `include/` 或函式庫的對應目錄
+```ini
+lib_deps =
+    https://github.com/FastLED/FastLED.git
+```
 
 ## 未來擴充方向
 
-### 測試硬體時
+已規劃但尚未實作的功能:
 
-1. 使用 `Serial.begin(9600)` 初始化序列埠根據 README.md，規劃的功能包括：
+-   [ ] 音效回饋 (需蜂鳴器模組)
+-   [ ] 最高分數記錄 (需 EEPROM 儲存)
+-   [ ] 多人競賽模式 (需多組感測器)
+-   [ ] WS2812B 燈條支援 (需 FastLED 函式庫)
 
-2. 用 `Serial.print()` 輸出除錯資訊（旋轉次數、能量值等）
-
-3. 提醒使用者執行 `pio device monitor` 查看即時輸出（Agent 無法執行）- 音效回饋（需加入蜂鳴器或音效模組）
-
--   最高分數記錄（需 EEPROM 儲存）
-
-### 調整硬體設定- 多人競賽模式（需多組感測器與狀態管理）
-
--   修改 `platformio.ini` 的 `upload_port` 指定 COM port（Windows）或 `/dev/ttyUSB0`（Linux）- 更多燈光效果（可使用 NeoPixel 或 WS2812B 燈條）
-
--   調整 `monitor_speed` 設定序列埠鮑率（預設通常是 9600）
-
-## 重要提醒
-
--   **硬體實作前必須先網路查證**：使用搜尋工具確認模組規格、腳位、接線方式
--   **不要使用 `delay()` 阻塞主迴圈**：改用 `millis()` 實作非阻塞計時
--   **去彈跳處理**：霍爾感測器可能產生雜訊，需實作去彈跳邏輯
--   **中斷函數要簡短**：在 ISR 中只做必要操作，避免複雜運算
--   **序列埠除錯**：開發階段保留 Serial 輸出，但上線版本可移除以節省記憶體
--   **Agent 無法執行 PlatformIO 指令**：只能修改程式碼，不能執行編譯上傳
-
-## 未來擴充方向
-
-根據 README.md，規劃的功能包括：
-
--   音效回饋（需加入蜂鳴器或音效模組）
--   最高分數記錄（需 EEPROM 儲存）
--   多人競賽模式（需多組感測器與狀態管理）
--   更多燈光效果（可使用 NeoPixel 或 WS2812B 燈條）
-
-**擴充功能前的查證範例：**
+**擴充前查證範例**:
 
 -   搜尋「Arduino 蜂鳴器接線」
--   搜尋「Arduino EEPROM 讀寫範例」
--   搜尋「Arduino WS2812B FastLED 函式庫」
+-   搜尋「Arduino EEPROM.write 範例」
+-   搜尋「FastLED GitHub official repository」
