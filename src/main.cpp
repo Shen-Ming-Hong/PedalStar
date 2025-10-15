@@ -2,20 +2,23 @@
  * 光光星 PedalStar - 互動式兒童遊樂設施控制系統
  *
  * 功能：透過霍爾感測器偵測腳踏車輪子旋轉,計算能量累積,
- *       並以 5 顆 RG LED 燈提供即時視覺回饋（模擬星星顏色）
+ *       並以 32 顆單色 LED 燈提供即時視覺回饋（進度條效果）
  *
  * 硬體架構：
  *   - Arduino Uno (ATmega328P)
  *   - 霍爾感測器模組 (A3144) × 1
- *   - RG LED 模組（共陰極，使用紅、綠雙色）× 5
+ *   - PCA9685 PWM 驅動模組 × 2 (I²C 控制)
+ *   - 單色 LED × 32 (可調整數量)
  *
  * 開發環境：PlatformIO + Arduino Framework
- * 版本：v1.2
- * 日期：2025-10-08
- * 更新：優化難度參數（MAX_ROTATIONS: 10→20, DECAY_RATE: 5%→8%）
+ * 版本：v2.0
+ * 日期：2025-10-15
+ * 更新：改用 PCA9685 驅動 32 顆單色 LED,LED 數量可調整
  */
 
 #include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
 // ==================== 腳位定義 ====================
 // 霍爾感測器模組（查證來源：A3144 模組，內建上拉電阻與去耦電容）
@@ -24,35 +27,20 @@
 // 工作原理：磁鐵 S 極靠近時輸出 LOW，遠離時輸出 HIGH
 #define HALL_SENSOR_PIN 2 // D2 = INT0 中斷腳位
 
-// RG LED 腳位配置（查證來源：Arduino Uno PWM 腳位）
-// Arduino Uno PWM 腳位：D3, D5, D6, D9, D10, D11（共 6 個）
-// 每顆 RG LED 使用 2 個腳位（R, G），共需 10 個腳位
-// 注意：D2 被霍爾感測器佔用（中斷腳位）
-//
-// LED 連接方式：共陰極（需要高電位點亮）
-//
-// 【優化接線策略 - 相鄰腳位配對】
-// - 每顆 LED 的 R 和 G 使用相鄰或接近的腳位，減少跳線
-// - 綠色通道優先使用 PWM 腳位（支援漸變效果）
-// - 紅色通道使用數位腳位（僅需開/關控制）
-//
-// 腳位分配（按照 Arduino Uno 板子上的物理順序）：
-#define LED1_G 3 // LED #1 綠色 → D3（PWM 腳位）
-#define LED1_R 4 // LED #1 紅色 → D4（數位腳位）★ 相鄰
+// PCA9685 模組配置（查證來源：16 通道 PWM 驅動器，I²C 通訊）
+// 接線：VCC->5V, GND->GND, SDA->A4, SCL->A5
+// 模組優點：16 個 PWM 通道，透過 I²C 控制，節省 Arduino 腳位
+// I²C 位址：0x40 (預設), 0x41 (焊接 A0 跳線)
+// 每通道電流：25mA @ 5V (開漏輸出)
+#define PCA9685_ADDR_1 0x40 // PCA9685 #1 位址（預設）
+#define PCA9685_ADDR_2 0x41 // PCA9685 #2 位址（焊接 A0）
+#define PCA9685_FREQ 1000   // PWM 頻率 (Hz)，1000Hz 足夠 LED 使用
 
-#define LED2_G 5 // LED #2 綠色 → D5（PWM 腳位）
-#define LED2_R 7 // LED #2 紅色 → D7（數位腳位，跳過 D6）
-
-#define LED3_G 6 // LED #3 綠色 → D6（PWM 腳位）
-#define LED3_R 8 // LED #3 紅色 → D8（數位腳位）
-
-#define LED4_G 9  // LED #4 綠色 → D9（PWM 腳位）
-#define LED4_R 12 // LED #4 紅色 → D12（數位腳位）
-
-#define LED5_G 10 // LED #5 綠色 → D10（PWM 腳位）
-#define LED5_R 11 // LED #5 紅色 → D11（PWM 腳位，可當數位腳位用）★ 相鄰
-
-#define NUM_LEDS 5 // LED 總數
+// ⚙️ LED 數量配置（可調整）
+// 注意：每個 PCA9685 有 16 個通道
+// - 使用 1 個 PCA9685: 最多 16 顆
+// - 使用 2 個 PCA9685: 最多 32 顆
+#define NUM_LEDS 32 // ⚙️ LED 總數（可調整：1-32）
 
 // ==================== 參數配置 ====================
 #define TIME_WINDOW 1000    // 時間窗口：1秒（提高輸出頻率）
@@ -68,9 +56,13 @@
 #define DECAY_INTERVAL 1000 // 衰減檢查間隔：1 秒
 
 // ==================== 全域變數 ====================
-// LED 腳位陣列（用於批次操作）
-const int LED_R_PINS[NUM_LEDS] = {LED1_R, LED2_R, LED3_R, LED4_R, LED5_R};
-const int LED_G_PINS[NUM_LEDS] = {LED1_G, LED2_G, LED3_G, LED4_G, LED5_G};
+// PCA9685 驅動物件
+Adafruit_PWMServoDriver pca9685_1 = Adafruit_PWMServoDriver(PCA9685_ADDR_1);
+Adafruit_PWMServoDriver pca9685_2 = Adafruit_PWMServoDriver(PCA9685_ADDR_2);
+
+// PWM 亮度值（PCA9685 使用 12-bit，範圍 0-4095）
+#define PWM_OFF 0
+#define PWM_ON 4095 // 全亮
 
 // 霍爾感測器相關變數（使用 volatile 因為在 ISR 中修改）
 volatile unsigned int rotationCount = 0;
@@ -137,33 +129,37 @@ void hallSensorISR()
 
 // ==================== LED 控制函式 ====================
 /*
- * 設定單顆 LED 的 RG 顏色
- * @param ledNum LED 編號 (0-4 對應 LED1-LED5)
- * @param r 紅色亮度 (0-255)
- * @param g 綠色亮度 (0-255)
+ * 設定單顆 LED 的開關狀態
+ * @param ledNum LED 編號 (0-31 對應 LED1-LED32)
+ * @param state LED 狀態 (true=點亮, false=熄滅)
  */
-void setLEDColor(int ledNum, uint8_t r, uint8_t g)
+void setLED(int ledNum, bool state)
 {
   if (ledNum < 0 || ledNum >= NUM_LEDS)
     return;
 
-  // 紅色通道（數位腳位，僅能全亮或全暗）
-  digitalWrite(LED_R_PINS[ledNum], r > 127 ? HIGH : LOW);
-
-  // 綠色通道（PWM 腳位，支援漸變）
-  analogWrite(LED_G_PINS[ledNum], g);
+  // 判斷使用哪個 PCA9685 模組
+  if (ledNum < 16)
+  {
+    // LED 0-15: PCA9685 #1
+    pca9685_1.setPWM(ledNum, 0, state ? PWM_ON : PWM_OFF);
+  }
+  else
+  {
+    // LED 16-31: PCA9685 #2
+    pca9685_2.setPWM(ledNum - 16, 0, state ? PWM_ON : PWM_OFF);
+  }
 }
 
 /*
- * 設定所有 LED 為相同顏色
- * @param r 紅色亮度 (0-255)
- * @param g 綠色亮度 (0-255)
+ * 設定所有 LED 為相同狀態
+ * @param state LED 狀態 (true=點亮, false=熄滅)
  */
-void setAllLEDs(uint8_t r, uint8_t g)
+void setAllLEDs(bool state)
 {
   for (int i = 0; i < NUM_LEDS; i++)
   {
-    setLEDColor(i, r, g);
+    setLED(i, state);
   }
 }
 
@@ -172,15 +168,11 @@ void setAllLEDs(uint8_t r, uint8_t g)
  */
 void clearAllLEDs()
 {
-  for (int i = 0; i < NUM_LEDS; i++)
-  {
-    digitalWrite(LED_R_PINS[i], LOW);
-    analogWrite(LED_G_PINS[i], 0);
-  }
+  setAllLEDs(false);
 }
 
 /*
- * 根據能量等級點亮對應數量的 LED（星星顏色漸變：紅→黃→綠）
+ * 根據能量等級點亮對應數量的 LED（進度條效果）
  * @param energyLevel 能量等級 (0-100 百分比)
  */
 void updateLEDsByEnergy(int energyLevel)
@@ -188,61 +180,14 @@ void updateLEDsByEnergy(int energyLevel)
   // 限制能量等級範圍
   energyLevel = constrain(energyLevel, 0, 100);
 
-  // 將能量等級映射到 LED 數量 (0-5)
+  // 將能量等級映射到 LED 數量 (0-NUM_LEDS)
   int numLEDsToLight = map(energyLevel, 0, 100, 0, NUM_LEDS);
   numLEDsToLight = constrain(numLEDsToLight, 0, NUM_LEDS);
 
-  // 根據能量等級選擇星星顏色（紅→橙→黃→黃綠→綠）
-  uint8_t r, g;
-  const char *colorName;
-
-  if (energyLevel < 20)
-  {
-    // 低能量：紅色（冷星）
-    r = PWM_MAX;
-    g = 0;
-    colorName = "紅色";
-  }
-  else if (energyLevel < 40)
-  {
-    // 低中能量：橙色
-    r = PWM_MAX;
-    g = PWM_MAX / 3;
-    colorName = "橙色";
-  }
-  else if (energyLevel < 60)
-  {
-    // 中能量：黃色（太陽色）
-    r = PWM_MAX;
-    g = PWM_MAX * 2 / 3;
-    colorName = "黃色";
-  }
-  else if (energyLevel < 80)
-  {
-    // 中高能量：黃綠色
-    r = PWM_MAX / 2;
-    g = PWM_MAX;
-    colorName = "黃綠色";
-  }
-  else
-  {
-    // 高能量：綠色（熱星）
-    r = 0;
-    g = PWM_MAX;
-    colorName = "綠色";
-  }
-
-  // 點亮對應數量的 LED
+  // 點亮對應數量的 LED（進度條效果）
   for (int i = 0; i < NUM_LEDS; i++)
   {
-    if (i < numLEDsToLight)
-    {
-      setLEDColor(i, r, g); // 點亮
-    }
-    else
-    {
-      setLEDColor(i, 0, 0); // 熄滅
-    }
+    setLED(i, i < numLEDsToLight);
   }
 
   // 序列埠除錯輸出
@@ -250,9 +195,9 @@ void updateLEDsByEnergy(int energyLevel)
   Serial.print(energyLevel);
   Serial.print("% -> 點亮 ");
   Serial.print(numLEDsToLight);
-  Serial.print(" 顆 LED (顏色: ");
-  Serial.print(colorName);
-  Serial.println(")");
+  Serial.print("/");
+  Serial.print(NUM_LEDS);
+  Serial.println(" 顆 LED");
 }
 
 /*
@@ -276,31 +221,36 @@ int calculateEnergy()
 void ledStartupTest()
 {
   Serial.println("開始 LED 測試...");
+  Serial.print("LED 數量: ");
+  Serial.println(NUM_LEDS);
 
-  // 測試紅色
-  Serial.println("測試紅色...");
-  setAllLEDs(PWM_MAX, 0);
+  // 測試全亮
+  Serial.println("測試全亮...");
+  setAllLEDs(true);
   delay(500);
 
-  // 測試黃色（星星色）
-  Serial.println("測試黃色（星星色）...");
-  setAllLEDs(PWM_MAX, PWM_MAX * 2 / 3);
+  // 測試全暗
+  Serial.println("測試全暗...");
+  setAllLEDs(false);
   delay(500);
 
-  // 測試綠色
-  Serial.println("測試綠色...");
-  setAllLEDs(0, PWM_MAX);
-  delay(500);
-
-  // 逐顆點亮測試（星星閃爍效果）
-  Serial.println("逐顆點亮測試（星星閃爍）...");
-  clearAllLEDs();
+  // 逐顆點亮測試（流水燈效果）
+  Serial.println("逐顆點亮測試（流水燈）...");
   for (int i = 0; i < NUM_LEDS; i++)
   {
-    setLEDColor(i, PWM_MAX, PWM_MAX * 2 / 3); // 黃色（星星色）
-    delay(200);
+    setLED(i, true);
+    delay(50); // 加快速度以適應更多 LED
   }
   delay(500);
+
+  // 逐顆熄滅測試
+  Serial.println("逐顆熄滅測試...");
+  for (int i = 0; i < NUM_LEDS; i++)
+  {
+    setLED(i, false);
+    delay(50);
+  }
+  delay(300);
 
   // 清除所有 LED
   clearAllLEDs();
@@ -322,19 +272,22 @@ void setup()
   Serial.println("硬體配置：");
   Serial.println("  - Arduino Uno (ATmega328P)");
   Serial.println("  - 霍爾感測器模組 (A3144)");
-  Serial.println("  - RG LED 模組（紅、綠雙色）× 5");
+  Serial.println("  - PCA9685 PWM 驅動模組 × 2");
+  Serial.print("  - 單色 LED × ");
+  Serial.println(NUM_LEDS);
   Serial.println();
 
   Serial.println("腳位配置：");
   Serial.print("  - 霍爾感測器: D");
   Serial.print(HALL_SENSOR_PIN);
   Serial.println(" (INT0)");
-  Serial.println("  - LED 接線（優化為相鄰腳位）：");
-  Serial.println("    LED1: G=D3(PWM), R=D4 ★相鄰");
-  Serial.println("    LED2: G=D5(PWM), R=D7");
-  Serial.println("    LED3: G=D6(PWM), R=D8");
-  Serial.println("    LED4: G=D9(PWM), R=D12");
-  Serial.println("    LED5: G=D10(PWM), R=D11 ★相鄰");
+  Serial.println("  - I²C 通訊: A4(SDA), A5(SCL)");
+  Serial.print("  - PCA9685 #1: 0x");
+  Serial.print(PCA9685_ADDR_1, HEX);
+  Serial.println(" (LED 0-15)");
+  Serial.print("  - PCA9685 #2: 0x");
+  Serial.print(PCA9685_ADDR_2, HEX);
+  Serial.println(" (LED 16-31)");
   Serial.println();
 
   Serial.println("參數設定：");
@@ -347,8 +300,37 @@ void setup()
   Serial.print(DEBOUNCE_DELAY);
   Serial.println(" ms");
   Serial.print("  - LED 數量: ");
-  Serial.println(NUM_LEDS);
+  Serial.print(NUM_LEDS);
+  Serial.println(" (可調整)");
+  Serial.print("  - 能量階差: ");
+  Serial.print(100.0 / NUM_LEDS, 2);
+  Serial.println("% 每顆");
   Serial.println();
+
+  // 初始化 I²C 通訊
+  Wire.begin();
+  Serial.println("✓ I²C 通訊初始化完成");
+
+  // 初始化 PCA9685 模組
+  pca9685_1.begin();
+  pca9685_1.setPWMFreq(PCA9685_FREQ);
+  Serial.print("✓ PCA9685 #1 初始化完成 (位址: 0x");
+  Serial.print(PCA9685_ADDR_1, HEX);
+  Serial.println(")");
+
+  // 檢查是否需要初始化第二個模組
+  if (NUM_LEDS > 16)
+  {
+    pca9685_2.begin();
+    pca9685_2.setPWMFreq(PCA9685_FREQ);
+    Serial.print("✓ PCA9685 #2 初始化完成 (位址: 0x");
+    Serial.print(PCA9685_ADDR_2, HEX);
+    Serial.println(")");
+  }
+  else
+  {
+    Serial.println("  (PCA9685 #2 未使用)");
+  }
 
   // 設定霍爾感測器腳位為輸入
   // 注意：模組已內建上拉電阻，使用 INPUT 即可
@@ -361,16 +343,6 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN),
                   hallSensorISR, CHANGE);
   Serial.println("✓ 中斷服務已啟用 (CHANGE mode - 完整波形偵測)");
-
-  // 初始化 LED 腳位
-  for (int i = 0; i < NUM_LEDS; i++)
-  {
-    pinMode(LED_R_PINS[i], OUTPUT);
-    pinMode(LED_G_PINS[i], OUTPUT);
-  }
-  Serial.println("✓ LED 腳位初始化完成");
-  Serial.println("  配對方式: (G綠色-PWM, R紅色)");
-  Serial.println("  LED1: D3-D4, LED2: D5-D7, LED3: D6-D8, LED4: D9-D12, LED5: D10-D11");
 
   // 關閉所有 LED（初始狀態）
   clearAllLEDs();
