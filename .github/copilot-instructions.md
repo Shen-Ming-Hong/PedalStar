@@ -2,7 +2,7 @@
 
 ## 專案概述
 
-這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統,使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉,並根據旋轉圈數控制 5 顆雙色 LED (RG) 燈的能量顯示效果,模擬星星從紅色到綠色的發光變化。
+這是一個基於 Arduino Uno 的互動式兒童遊樂設施控制系統,使用 **PlatformIO** 框架開發。核心功能是透過霍爾感測器偵測腳踏車輪子旋轉,並根據旋轉圈數控制最多 32 顆單色 LED 燈的能量顯示效果,形成進度條視覺回饋。系統使用 2 個 PCA9685 PWM 驅動模組透過 I²C 控制 LED,大幅節省 Arduino 腳位。
 
 ## 架構與設計原則
 
@@ -10,8 +10,10 @@
 
 -   **主控制器**: Arduino Uno (ATmega328P)
 -   **感測輸入**: 霍爾感測器模組 A3144 (D2) + 磁鐵
--   **輸出裝置**: 5 顆雙色 LED (紅、綠,共陰極)
--   **資料流**: 霍爾中斷 → 計數累積 → 能量計算 → 燈光顏色漸變 (紅 → 橙 → 黃 → 黃綠 → 綠)
+-   **輸出驅動**: PCA9685 PWM 驅動模組 × 2 (I²C 位址 0x40, 0x41)
+-   **輸出裝置**: 單色 LED × 32 (數量可調整 1-32)
+-   **資料流**: 霍爾中斷 → 計數累積 → 能量計算 → 進度條燈光顯示
+-   **通訊協定**: I²C (SDA=A4, SCL=A5)
 
 ### 關鍵設計模式
 
@@ -40,23 +42,28 @@ if (currentMillis - previousMillis >= TIME_WINDOW) {
 -   每秒降低 8% 能量 (`DECAY_RATE`)
 -   透過 `lastRotationTime` 追蹤最後活動時間
 
-### 腳位配置 (相鄰腳位優化)
+### 腳位配置 (I²C 簡化架構)
 
 ```
-霍爾感測器: D2 (INT0 中斷腳位)
-LED 配置 (G-R 盡量相鄰以簡化接線):
-  LED1: G=D3(PWM), R=D4 ★相鄰
-  LED2: G=D5(PWM), R=D7
-  LED3: G=D6(PWM), R=D8
-  LED4: G=D9(PWM), R=D12
-  LED5: G=D10(PWM), R=D11 ★相鄰
+Arduino Uno 腳位使用:
+  D2: 霍爾感測器 (INT0 中斷腳位)
+  A4: I²C SDA (資料線,連接兩個 PCA9685)
+  A5: I²C SCL (時鐘線,連接兩個 PCA9685)
+
+PCA9685 #1 (位址 0x40):
+  通道 0-15: LED #1-16
+
+PCA9685 #2 (位址 0x41,需焊接 A0):
+  通道 0-15: LED #17-32
 ```
 
 **設計理由**:
 
--   綠色通道全部使用 PWM 腳位 → 支援平滑漸變
--   紅色通道使用數位腳位 → 僅需開/關控制
--   避免 D13 (板載 LED 干擾除錯)
+-   僅使用 3 個 Arduino 腳位 (D2 + A4 + A5)
+-   I²C 匯流排架構,模組並聯連接
+-   剩餘 11 個數位腳位 (D3-D13) 可用於擴充
+-   PCA9685 提供 12-bit PWM 控制 (僅用於開/關)
+-   LED 數量可彈性調整 (1-32 顆)
 
 ## 開發工作流程
 
@@ -95,7 +102,7 @@ pio run --target upload && pio device monitor
 -   **`src/main.cpp`**: 所有功能實作集中於此 (單一檔案架構)
 -   **`include/`**: 空目錄 (未來可放標頭檔)
 -   **`lib/`**: 空目錄 (未來可模組化為自訂函式庫)
--   **`platformio.ini`**: 無外部依賴,使用 Arduino 內建功能
+-   **`platformio.ini`**: 依賴 Adafruit PWM Servo Driver Library v3.0.2+
 
 ### 除錯流程
 
@@ -106,15 +113,22 @@ pio run --target upload && pio device monitor
 
 ## 專案特定慣例
 
-### 調整遊戲難度
+### 調整遊戲難度與 LED 配置
 
 在 `src/main.cpp` 頂部調整以下參數:
 
 ```cpp
+#define NUM_LEDS 32         // ⚙️ LED 總數量 (可調整: 1-32)
 #define MAX_ROTATIONS 20    // ⚙️ 達到 100% 能量所需每秒圈數 (增加=更難)
 #define DECAY_RATE 8        // ⚙️ 能量衰減速度 %/秒 (增加=能量消失更快)
 #define IDLE_TIMEOUT 3000   // 開始衰減前的等待時間 (毫秒)
 ```
+
+**LED 數量配置**:
+
+-   **1-16 顆**: 只使用 PCA9685 #1 (位址 0x40)
+-   **17-32 顆**: 使用兩個 PCA9685 (位址 0x40 + 0x41)
+-   程式會自動判斷是否需要初始化第二個模組
 
 **難度建議**:
 
@@ -124,17 +138,23 @@ pio run --target upload && pio device monitor
 
 ### 能量與燈光映射
 
-能量百分比決定點亮 LED 數量與顏色:
+能量百分比決定點亮 LED 數量 (進度條效果):
 
-| 能量範圍 | LED 數量 | 顏色 (R,G) | 視覺效果         |
-| -------- | -------- | ---------- | ---------------- |
-| 0-20%    | 1 顆     | (255,0)    | 🔴 紅色 (冷星)   |
-| 20-40%   | 2 顆     | (255,85)   | 🟠 橙色          |
-| 40-60%   | 3 顆     | (255,170)  | 🟡 黃色 (太陽色) |
-| 60-80%   | 4 顆     | (127,255)  | 🟢 黃綠色        |
-| 80-100%  | 5 顆     | (0,255)    | 💚 綠色 (熱星)   |
+```cpp
+// 能量階差 = 100% ÷ NUM_LEDS
+// 範例 (NUM_LEDS = 32):
+能量   0% → 0 顆亮
+能量  25% → 8 顆亮
+能量  50% → 16 顆亮
+能量  75% → 24 顆亮
+能量 100% → 32 顆亮
+```
 
-實作於 `updateLEDsByEnergy(int energyLevel)` 函式。
+實作於 `updateLEDsByEnergy(int energyLevel)` 函式,使用線性映射:
+
+```cpp
+int numLEDsToLight = map(energyLevel, 0, 100, 0, NUM_LEDS);
+```
 
 ### 除錯參數
 
@@ -184,10 +204,18 @@ void hallSensorISR() {
 
 ### 新增外部函式庫
 
-目前專案不依賴外部函式庫。若未來需要 (如 FastLED),優先使用 GitHub URL:
+目前專案依賴:
 
 ```ini
 lib_deps =
+    adafruit/Adafruit PWM Servo Driver Library@^3.0.2
+```
+
+若未來需要其他函式庫 (如 FastLED),優先使用 PlatformIO Registry 或 GitHub URL:
+
+```ini
+lib_deps =
+    adafruit/Adafruit PWM Servo Driver Library@^3.0.2
     https://github.com/FastLED/FastLED.git
 ```
 
@@ -195,10 +223,12 @@ lib_deps =
 
 已規劃但尚未實作的功能:
 
--   [ ] 音效回饋 (需蜂鳴器模組)
+-   [ ] 音效回饋 (需蜂鳴器模組,可使用剩餘腳位)
 -   [ ] 最高分數記錄 (需 EEPROM 儲存)
 -   [ ] 多人競賽模式 (需多組感測器)
--   [ ] WS2812B 燈條支援 (需 FastLED 函式庫)
+-   [ ] RGB LED 燈條支援 (可串接更多 PCA9685 或使用 WS2812B)
+-   [ ] 多種燈光效果模式 (跑馬燈、呼吸燈等)
+-   [ ] OLED 顯示器顯示即時數據 (透過 I²C,與 PCA9685 共用匯流排)
 
 **擴充前查證範例**:
 
