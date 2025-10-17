@@ -44,7 +44,7 @@
 
 // ==================== 參數配置 ====================
 #define TIME_WINDOW 1000    // 時間窗口：1秒（提高輸出頻率）
-#define MAX_ROTATIONS 20    // 最大圈數⚙️ 調高此值可增加難度
+#define MAX_ROTATIONS 50    // 最大圈數⚙️ 調高此值可增加難度
 #define DEBOUNCE_DELAY 10   // 去彈跳延遲：10ms（提高靈敏度,適應快速踩踏）⚙️
 #define ENERGY_LEVELS 5     // 能量等級數量
 #define PWM_MAX 255         // Arduino PWM 最大值（8 位元，0-255）
@@ -52,7 +52,7 @@
 
 // 能量衰減參數
 #define IDLE_TIMEOUT 3000   // 閒置超過 3 秒開始衰減
-#define DECAY_RATE 8        // 衰減速率：每秒降低 8% ⚙️ 調高此值能量消失更快
+#define DECAY_RATE 4        // 衰減速率：每秒降低 4% (= 1顆LED) ⚙️ 調高此值能量消失更快
 #define DECAY_INTERVAL 1000 // 衰減檢查間隔：1 秒
 
 // ==================== 全域變數 ====================
