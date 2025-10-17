@@ -45,7 +45,7 @@
 // ==================== 參數配置 ====================
 #define TIME_WINDOW 1000    // 時間窗口：1秒（提高輸出頻率）
 #define MAX_ROTATIONS 20    // 最大圈數⚙️ 調高此值可增加難度
-#define DEBOUNCE_DELAY 50   // 去彈跳延遲：50ms
+#define DEBOUNCE_DELAY 10   // 去彈跳延遲：10ms（提高靈敏度,適應快速踩踏）⚙️
 #define ENERGY_LEVELS 5     // 能量等級數量
 #define PWM_MAX 255         // Arduino PWM 最大值（8 位元，0-255）
 #define PRINT_ROTATION true // 是否即時輸出每次旋轉偵測
@@ -91,7 +91,7 @@ void hallSensorISR()
   unsigned long currentTime = millis();
   int sensorState = digitalRead(HALL_SENSOR_PIN);
 
-  // 去彈跳處理：50ms 內的重複觸發視為雜訊
+  // 去彈跳處理：10ms 內的重複觸發視為雜訊（已針對快速踩踏優化）
   if (currentTime - lastInterruptTime > DEBOUNCE_DELAY)
   {
     if (sensorState == LOW)
@@ -298,7 +298,7 @@ void setup()
   Serial.println(MAX_ROTATIONS);
   Serial.print("  - 去彈跳延遲: ");
   Serial.print(DEBOUNCE_DELAY);
-  Serial.println(" ms");
+  Serial.println(" ms（快速踩踏優化）");
   Serial.print("  - LED 數量: ");
   Serial.print(NUM_LEDS);
   Serial.println(" (可調整)");
